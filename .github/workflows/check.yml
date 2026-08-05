@@ -1,0 +1,42 @@
+name: BTCUSDT setup check
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: btcusdt-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run setup check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHECK_ONCE: "1"
+        run: python3 btcusdt_setup_bot.py
+
+      - name: Persist dedup state
+        run: |
+          if [ -n "$(git status --porcelain bot_state.json)" ]; then
+            git config user.name "btc-setup-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add bot_state.json
+            git commit -m "update state [skip ci]"
+            git push
+          fi
