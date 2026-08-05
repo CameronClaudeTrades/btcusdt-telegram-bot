@@ -10,30 +10,33 @@ LONG:
      closes outside the upper Bollinger Band (20, 2std) within 40 minutes
      (8 x 5m candles) of that cross.
   2. On the 15m chart: 10 EMA is above 30 EMA (trend agrees).
-  3. Price is above the 200 EMA.  <-- ASSUMPTION: evaluated on the 15m
-     chart (not specified in the brief). Change EMA200_TIMEFRAME below if
-     you meant the 5m chart instead.
+  3. Price is above the 200 EMA, evaluated on the 15m chart.
 
 SHORT: mirror image (death cross + lower band break, 15m 30>10, price < 200EMA)
 
 On a valid signal it sends a Telegram message with entry, stop-loss,
 take-profit and position size, based on:
-  - Stop-loss distance: 0.4%  (ASSUMPTION: "SL is 0.4" read as 0.4%)
+  - Stop-loss distance: 0.4%
   - Reward:Risk = 1:4
   - Position size = 40% of account (informational only, not auto-traded)
 
 This script does NOT place any trades. It only reads public market data
 and sends you a Telegram message.
 
-SETUP
------
-1. pip install requests
-2. Fill in TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID below.
-3. Run it: python3 btcusdt_setup_bot.py
-   It polls every 60s and only evaluates once a new 5m candle closes.
-   Keep it running 24/7 on a machine/server/VPS of your choice (see
-   README.md for free hosting options) -- this script has no scheduler
-   built in, it just loops.
+TWO RUN MODES
+-------------
+1. Loop mode (default) - runs forever, polling every POLL_SECONDS, only
+   evaluating when a new 5m candle closes. Use this for a persistent host
+   (Railway, a VPS, your own machine).
+2. Single-check mode - set env var CHECK_ONCE=1 and it runs one evaluation
+   pass then exits. Use this for a scheduler that re-invokes it on a cron
+   (e.g. GitHub Actions every 5 minutes) - the scheduler provides the loop.
+
+CONFIG (environment variables)
+-------------------------------
+TELEGRAM_BOT_TOKEN  (required)
+TELEGRAM_CHAT_ID    (required)
+CHECK_ONCE          ("1" to run once and exit, default: loop forever)
 """
 
 import json
@@ -44,12 +47,11 @@ from datetime import datetime, timezone
 import requests
 
 # ----------------------------------------------------------------------
-# CONFIG - set TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID as environment
-# variables (e.g. Railway service variables). Falls back to the literal
-# strings below only if you're running this locally and prefer to hardcode.
+# CONFIG
 # ----------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PASTE_YOUR_BOT_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "PASTE_YOUR_CHAT_ID_HERE")
+CHECK_ONCE = os.environ.get("CHECK_ONCE", "0") == "1"
 
 SYMBOL = "BTCUSDT"
 EMA_FAST = 10
@@ -61,7 +63,7 @@ BB_STD = 2
 CROSS_BREAKOUT_WINDOW_MIN = 40          # confirm BB break within this many minutes of the cross
 CROSS_BREAKOUT_WINDOW_CANDLES = CROSS_BREAKOUT_WINDOW_MIN // 5  # on the 5m chart -> 8 candles
 
-EMA200_TIMEFRAME = "15m"                # ASSUMPTION - change to "5m" if that's what you meant
+EMA200_TIMEFRAME = "15m"                # confirmed with user: 200EMA filter uses the 15m chart
 
 STOP_LOSS_PCT = 0.004                   # 0.4%
 REWARD_RISK = 4                         # 1:4
@@ -262,7 +264,21 @@ def format_alert(direction, price, sl, tp, cross_time):
     )
 
 
+def run_once():
+    alerts = evaluate()
+    for direction, price, sl, tp, cross_time in alerts:
+        msg = format_alert(direction, price, sl, tp, cross_time)
+        print(msg)
+        send_telegram(msg)
+    if not alerts:
+        print(f"[{datetime.now(timezone.utc)}] no setup this check")
+
+
 def main():
+    if CHECK_ONCE:
+        run_once()
+        return
+
     print(f"Watching {SYMBOL}... polling every {POLL_SECONDS}s")
     last_checked_candle = None
     while True:
@@ -271,11 +287,7 @@ def main():
             latest_open_time = candles_5m[-1]["open_time"]
             if latest_open_time != last_checked_candle:
                 last_checked_candle = latest_open_time
-                alerts = evaluate()
-                for direction, price, sl, tp, cross_time in alerts:
-                    msg = format_alert(direction, price, sl, tp, cross_time)
-                    print(msg)
-                    send_telegram(msg)
+                run_once()
         except Exception as e:  # noqa: BLE001
             print(f"[{datetime.now(timezone.utc)}] error: {e}")
         time.sleep(POLL_SECONDS)
@@ -283,5 +295,5 @@ def main():
 
 if __name__ == "__main__":
     if "PASTE_YOUR" in TELEGRAM_BOT_TOKEN or "PASTE_YOUR" in TELEGRAM_CHAT_ID:
-        raise SystemExit("Fill in TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID at the top of this file first.")
+        raise SystemExit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID environment variables are not set.")
     main()
