@@ -1,5 +1,5 @@
 name: BTCUSDT setup check
-
+# trigger
 on:
   schedule:
     - cron: "*/5 * * * *"
